@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -17,10 +18,12 @@ import (
 const (
 	sampleRate          = 16000
 	readChunkSize       = 4096  // Size of FFmpeg read buffer
-	silenceThreshold    = 0.02  // Audio level threshold to detect silence
-	silenceDurationMs   = 700   // Silence duration in ms to trigger transcription
+	rmsWindowSize       = 160   // RMS calculation window (10ms at 16kHz)
+	silenceThreshold    = 0.01  // RMS threshold for speech detection
+	silenceDurationMs   = 800   // Silence duration in ms to trigger transcription
 	minSpeechDurationMs = 500   // Minimum speech duration to process
 	maxBufferDurationS  = 30    // Max buffer duration in seconds
+	noiseFloorSamples   = 32000 // Samples to calculate initial noise floor (2 seconds)
 )
 
 func main() {
@@ -83,11 +86,23 @@ func main() {
 	// Streaming buffer and VAD state
 	audioBuffer := make([]float32, 0, sampleRate*maxBufferDurationS)
 	chunk := make([]byte, readChunkSize)
-	
+
+	// RMS-based VAD state
+	rmsBuffer := make([]float32, 0, rmsWindowSize)
 	silenceSamples := 0
 	silenceThresholdSamples := (silenceDurationMs * sampleRate) / 1000
 	minSpeechSamples := (minSpeechDurationMs * sampleRate) / 1000
 	isSpeaking := false
+
+	// Adaptive noise floor
+	noiseFloorSamplesCount := 0
+	noiseFloorSum := 0.0
+	adaptiveThreshold := float32(silenceThreshold)
+	calibrating := true
+
+	if calibrating {
+		log.Printf("🎚️  Calibrating noise floor for %.1f seconds...", float64(noiseFloorSamples)/float64(sampleRate))
+	}
 
 	for {
 		n, err := stdout.Read(chunk)
@@ -101,29 +116,61 @@ func main() {
 			if i+4 <= n {
 				sample := float32FromBytes(chunk[i : i+4])
 				audioBuffer = append(audioBuffer, sample)
-				
-				// Check audio level for VAD
-				absLevel := sample
-				if absLevel < 0 {
-					absLevel = -absLevel
+
+				// Add to RMS calculation buffer
+				rmsBuffer = append(rmsBuffer, sample*sample) // Square for RMS
+				if len(rmsBuffer) > rmsWindowSize {
+					rmsBuffer = rmsBuffer[1:] // Keep sliding window
 				}
-				
-				if absLevel > silenceThreshold {
+
+				// Calculate RMS level
+				var rmsSum float32
+				for _, val := range rmsBuffer {
+					rmsSum += val
+				}
+				rmsLevel := float32(0.0)
+				if len(rmsBuffer) > 0 {
+					meanSquare := rmsSum / float32(len(rmsBuffer))
+					rmsLevel = float32(math.Sqrt(float64(meanSquare)))
+				}
+
+				// Adaptive noise floor calibration
+				if calibrating && noiseFloorSamplesCount < noiseFloorSamples {
+					noiseFloorSum += float64(rmsLevel)
+					noiseFloorSamplesCount++
+					if noiseFloorSamplesCount >= noiseFloorSamples {
+						noiseFloor := noiseFloorSum / float64(noiseFloorSamples)
+						adaptiveThreshold = float32(noiseFloor * 3.0) // 3x noise floor
+						if adaptiveThreshold < float32(silenceThreshold) {
+							adaptiveThreshold = float32(silenceThreshold)
+						}
+						calibrating = false
+						log.Printf("🎚️  Noise floor calibrated: %.6f, adaptive threshold: %.6f", noiseFloor, adaptiveThreshold)
+					}
+					continue // Skip VAD during calibration
+				}
+
+				// Voice Activity Detection using RMS
+				if rmsLevel > adaptiveThreshold {
 					// Speech detected
 					if !isSpeaking {
-						log.Println("🎤 Speech started")
+						log.Printf("🎤 Speech started (RMS: %.6f > %.6f)", rmsLevel, adaptiveThreshold)
 						isSpeaking = true
 					}
 					silenceSamples = 0
 				} else if isSpeaking {
 					// Increment silence counter
 					silenceSamples++
+					// if silenceSamples%1000 == 0 {
+					// 	log.Printf("🤫 Silence accumulating: %d samples (%.2fs), RMS: %.6f", silenceSamples, float64(silenceSamples)/float64(sampleRate), rmsLevel)
+					// }
 				}
 			}
 		}
 
 		// Check if we should process (silence detected after speech)
 		if isSpeaking && silenceSamples >= silenceThresholdSamples {
+			log.Printf("🔔 Trigger condition met: isSpeaking=%v, silenceSamples=%d, threshold=%d", isSpeaking, silenceSamples, silenceThresholdSamples)
 			if len(audioBuffer) >= minSpeechSamples {
 				log.Printf("📊 Processing %d samples (%.2f seconds)", len(audioBuffer), float64(len(audioBuffer))/float64(sampleRate))
 				currentText := processAudioStream(model, language, audioBuffer)
@@ -133,15 +180,25 @@ func main() {
 					timestamp := time.Now().Format("15:04:05")
 					fmt.Printf("[%s] 💬 %s\n", timestamp, currentText)
 				}
+			} else {
+				log.Printf("⚠️  Not enough speech samples: %d < %d", len(audioBuffer), minSpeechSamples)
 			}
-			
+
 			// Reset for next phrase
 			audioBuffer = audioBuffer[:0]
 			silenceSamples = 0
 			isSpeaking = false
 			log.Println("⏸️  Silence detected, ready for next phrase")
 		}
-		
+
+		// Debug info every second
+		if len(audioBuffer)%(sampleRate) == 0 && isSpeaking {
+			log.Printf("🔍 Status: buffer=%d samples (%.1fs), silence=%d samples (%.1fs), speaking=%v",
+				len(audioBuffer), float64(len(audioBuffer))/float64(sampleRate),
+				silenceSamples, float64(silenceSamples)/float64(sampleRate),
+				isSpeaking)
+		}
+
 		// Prevent buffer overflow
 		if len(audioBuffer) >= sampleRate*maxBufferDurationS {
 			log.Println("⚠️  Max buffer reached, processing...")
