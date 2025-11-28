@@ -1,4 +1,4 @@
-.PHONY: whispercpp build clean help model
+.PHONY: whispercpp build clean help model test coverage test-integration test-all
 
 WHISPER_DIR := deps/whisper.cpp
 WHISPER_REPO := https://github.com/ggerganov/whisper.cpp.git
@@ -7,11 +7,15 @@ MODEL_DIR := models
 
 help:
 	@echo "Available targets:"
-	@echo "  make whispercpp  - Clone and build whisper.cpp"
-	@echo "  make model       - Download Whisper large-v3 model"
-	@echo "  make build       - Build nrz-ai binary"
-	@echo "  make clean       - Remove build artifacts"
-	@echo "  make cleanall    - Remove everything including whisper.cpp"
+	@echo "  make whispercpp     - Clone and build whisper.cpp"
+	@echo "  make model          - Download Whisper large-v3 model"
+	@echo "  make build          - Build nrz-ai binary"
+	@echo "  make test           - Run unit tests"
+	@echo "  make test-integration - Run integration tests"
+	@echo "  make test-all       - Run all tests"
+	@echo "  make coverage       - Run tests with coverage report"
+	@echo "  make clean          - Remove build artifacts"
+	@echo "  make cleanall       - Remove everything including whisper.cpp"
 
 whispercpp:
 	@if [ ! -d "$(WHISPER_DIR)" ]; then \
@@ -50,6 +54,35 @@ build: whispercpp
 	 mkdir -p dist && \
 	 go build -o dist/nrz-ai ./cmd/nrz-ai
 	@echo "✅ nrz-ai built successfully"
+
+# Run unit tests
+test:
+	@echo "🧪 Running unit tests..."
+	@export CGO_LDFLAGS="-L$(PWD)/$(WHISPER_DIR)/build/src -L$(PWD)/$(WHISPER_DIR)/build/ggml/src -lwhisper -lggml -Wl,-rpath,$(PWD)/$(WHISPER_DIR)/build/src -Wl,-rpath,$(PWD)/$(WHISPER_DIR)/build/ggml/src -Wl,-rpath,/opt/rocm/lib" && \
+	 export CGO_CFLAGS="-I$(PWD)/$(WHISPER_DIR)/include -I$(PWD)/$(WHISPER_DIR)/ggml/include -I/opt/rocm/include" && \
+	 go test -v ./...
+	@echo "✅ Unit tests completed"
+
+# Run tests with coverage
+coverage:
+	@echo "🧪 Running tests with coverage..."
+	@mkdir -p coverage
+	@export CGO_LDFLAGS="-L$(PWD)/$(WHISPER_DIR)/build/src -L$(PWD)/$(WHISPER_DIR)/build/ggml/src -lwhisper -lggml -Wl,-rpath,$(PWD)/$(WHISPER_DIR)/build/src -Wl,-rpath,$(PWD)/$(WHISPER_DIR)/build/ggml/src -Wl,-rpath,/opt/rocm/lib" && \
+	 export CGO_CFLAGS="-I$(PWD)/$(WHISPER_DIR)/include -I$(PWD)/$(WHISPER_DIR)/ggml/include -I/opt/rocm/include" && \
+	 go test -v -coverprofile=coverage/coverage.out ./...
+	@go tool cover -html=coverage/coverage.out -o coverage/coverage.html
+	@echo "✅ Coverage report generated: coverage/coverage.html"
+
+# Run integration tests  
+test-integration:
+	@echo "🧪 Running integration tests..."
+	@export CGO_LDFLAGS="-L$(PWD)/$(WHISPER_DIR)/build/src -L$(PWD)/$(WHISPER_DIR)/build/ggml/src -lwhisper -lggml -Wl,-rpath,$(PWD)/$(WHISPER_DIR)/build/src -Wl,-rpath,$(PWD)/$(WHISPER_DIR)/build/ggml/src -Wl,-rpath,/opt/rocm/lib" && \
+	 export CGO_CFLAGS="-I$(PWD)/$(WHISPER_DIR)/include -I$(PWD)/$(WHISPER_DIR)/ggml/include -I/opt/rocm/include" && \
+	 go test -v ./cmd/nrz-ai/...
+	@echo "✅ Integration tests completed"
+
+# Run all tests
+test-all: test test-integration
 
 clean:
 	@echo "🧹 Cleaning build artifacts..."
