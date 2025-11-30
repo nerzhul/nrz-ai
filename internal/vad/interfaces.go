@@ -4,20 +4,20 @@ package vad
 type VoiceActivityDetector interface {
 	// Initialize initializes the VAD with configuration
 	Initialize(config VADConfig) error
-	
+
 	// ProcessSample processes a single audio sample
 	// Returns true if speech is detected, false for silence
 	ProcessSample(sample float32) bool
-	
+
 	// IsSpeaking returns current speech state
 	IsSpeaking() bool
-	
+
 	// GetSilenceDuration returns current silence duration in samples
 	GetSilenceDuration() int
-	
+
 	// Reset resets the VAD state for next phrase
 	Reset()
-	
+
 	// IsCalibrated returns true if noise floor calibration is complete
 	IsCalibrated() bool
 }

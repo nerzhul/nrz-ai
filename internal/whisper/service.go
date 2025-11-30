@@ -33,12 +33,12 @@ func (s *Service) LoadModel(modelPath string) error {
 	if err != nil {
 		return err
 	}
-	
+
 	s.model = model
 	s.config.ModelPath = modelPath
 	s.config.Threads = runtime.NumCPU()
 	s.isLoaded = true
-	
+
 	log.Printf("📦 Whisper model loaded: %s", modelPath)
 	return nil
 }
@@ -48,7 +48,7 @@ func (s *Service) Transcribe(audio []float32, language string) (TranscriptionRes
 	if !s.isLoaded {
 		return TranscriptionResult{}, ErrModelNotLoaded
 	}
-	
+
 	// Create a fresh context for each transcription
 	context, err := s.model.NewContext()
 	if err != nil {
@@ -67,14 +67,14 @@ func (s *Service) Transcribe(audio []float32, language string) (TranscriptionRes
 	// Extract all segments
 	var text string
 	var segments []Segment
-	
+
 	for {
 		segment, err := context.NextSegment()
 		if err != nil {
 			break
 		}
 		text += segment.Text
-		
+
 		segments = append(segments, Segment{
 			Text:     segment.Text,
 			Start:    float64(segment.Start) / 1000.0, // Convert ms to seconds

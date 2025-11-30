@@ -6,12 +6,12 @@ import (
 
 // RMSDetector implements VoiceActivityDetector using RMS-based detection
 type RMSDetector struct {
-	config            VADConfig
-	rmsBuffer         []float32
-	silenceSamples    int
-	speechSamples     int
-	isSpeaking        bool
-	
+	config         VADConfig
+	rmsBuffer      []float32
+	silenceSamples int
+	speechSamples  int
+	isSpeaking     bool
+
 	// Adaptive noise floor
 	noiseFloorSamplesCount int
 	noiseFloorSum          float64
@@ -33,15 +33,15 @@ func (r *RMSDetector) Initialize(config VADConfig) error {
 	r.rmsBuffer = make([]float32, 0, config.RMSWindowSize)
 	r.adaptiveThreshold = config.SilenceThreshold
 	r.calibrating = true
-	
+
 	log.Printf("🎯 VAD Initialized - RMS window: %d, silence threshold: %.3f, duration: %dms",
 		config.RMSWindowSize, config.SilenceThreshold, config.SilenceDurationMs)
-		
+
 	if r.calibrating {
-		log.Printf("🎚️  Calibrating noise floor for %.1f seconds...", 
+		log.Printf("🎚️  Calibrating noise floor for %.1f seconds...",
 			float64(config.NoiseFloorSamples)/float64(config.SampleRate))
 	}
-	
+
 	return nil
 }
 
@@ -52,10 +52,10 @@ func (r *RMSDetector) ProcessSample(sample float32) bool {
 	if len(r.rmsBuffer) > r.config.RMSWindowSize {
 		r.rmsBuffer = r.rmsBuffer[1:] // Keep sliding window
 	}
-	
+
 	// Calculate RMS level
 	rmsLevel := r.calculateRMS()
-	
+
 	// Adaptive noise floor calibration
 	if r.calibrating && r.noiseFloorSamplesCount < r.config.NoiseFloorSamples {
 		r.noiseFloorSum += float64(rmsLevel)
@@ -67,12 +67,12 @@ func (r *RMSDetector) ProcessSample(sample float32) bool {
 				r.adaptiveThreshold = r.config.SilenceThreshold
 			}
 			r.calibrating = false
-			log.Printf("🎚️  Noise floor calibrated: %.6f, adaptive threshold: %.6f", 
+			log.Printf("🎚️  Noise floor calibrated: %.6f, adaptive threshold: %.6f",
 				noiseFloor, r.adaptiveThreshold)
 		}
 		return false // Skip VAD during calibration
 	}
-	
+
 	// Voice Activity Detection using RMS
 	if rmsLevel > r.adaptiveThreshold {
 		// Speech detected
@@ -86,7 +86,7 @@ func (r *RMSDetector) ProcessSample(sample float32) bool {
 		// Increment silence counter
 		r.silenceSamples++
 	}
-	
+
 	return r.isSpeaking
 }
 
@@ -118,23 +118,23 @@ func (r *RMSDetector) calculateRMS() float32 {
 	if len(r.rmsBuffer) == 0 {
 		return 0.0
 	}
-	
+
 	var sum float32
 	for _, val := range r.rmsBuffer {
 		sum += val
 	}
-	
+
 	meanSquare := sum / float32(len(r.rmsBuffer))
 	// Simple approximation of square root
 	if meanSquare <= 0 {
 		return 0.0
 	}
-	
+
 	// Newton's method for square root
 	x := meanSquare
 	for i := 0; i < 5; i++ {
 		x = (x + meanSquare/x) / 2
 	}
-	
+
 	return x
 }

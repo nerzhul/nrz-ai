@@ -4,12 +4,12 @@ import "errors"
 
 // MockWhisperService implements WhisperService for testing
 type MockWhisperService struct {
-	isLoaded           bool
-	loadError          error
-	transcribeError    error
-	transcribeResult   TranscriptionResult
-	language           string
-	closeError         error
+	isLoaded         bool
+	loadError        error
+	transcribeError  error
+	transcribeResult TranscriptionResult
+	language         string
+	closeError       error
 }
 
 // NewMockWhisperService creates a mock Whisper service
@@ -54,11 +54,11 @@ func (m *MockWhisperService) Transcribe(audio []float32, language string) (Trans
 	if !m.isLoaded {
 		return TranscriptionResult{}, errors.New("model not loaded")
 	}
-	
+
 	if m.transcribeError != nil {
 		return TranscriptionResult{}, m.transcribeError
 	}
-	
+
 	return m.transcribeResult, nil
 }
 

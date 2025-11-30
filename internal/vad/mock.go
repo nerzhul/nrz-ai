@@ -2,12 +2,12 @@ package vad
 
 // MockVAD implements VoiceActivityDetector for testing
 type MockVAD struct {
-	initialized       bool
-	isSpeaking        bool
-	silenceDuration   int
-	isCalibrated      bool
-	speechDetections  []bool
-	currentSample     int
+	initialized      bool
+	isSpeaking       bool
+	silenceDuration  int
+	isCalibrated     bool
+	speechDetections []bool
+	currentSample    int
 }
 
 // NewMockVAD creates a mock voice activity detector
@@ -40,21 +40,21 @@ func (m *MockVAD) ProcessSample(sample float32) bool {
 	if len(m.speechDetections) == 0 {
 		return false
 	}
-	
+
 	if m.currentSample >= len(m.speechDetections) {
 		m.currentSample = 0 // Loop back to start
 	}
-	
+
 	speaking := m.speechDetections[m.currentSample]
 	m.currentSample++
-	
+
 	if speaking {
 		m.isSpeaking = true
 		m.silenceDuration = 0
 	} else if m.isSpeaking {
 		m.silenceDuration++
 	}
-	
+
 	return speaking
 }
 

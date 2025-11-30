@@ -31,15 +31,15 @@ func (m *MockAudioStream) Read(p []byte) (int, error) {
 	if m.closed {
 		return 0, errors.New("stream closed")
 	}
-	
+
 	if m.readError != nil {
 		return 0, m.readError
 	}
-	
+
 	if m.position >= len(m.data) {
 		return 0, io.EOF
 	}
-	
+
 	n := copy(p, m.data[m.position:])
 	m.position += n
 	return n, nil
