@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"os/signal"
 	"strings"
 	"syscall"
@@ -37,6 +38,7 @@ type Config struct {
 	// Wake Word
 	WakeWordEnabled bool
 	WakeWord        string
+	WakeWordSound   string
 
 	// AI Configuration
 	AIEnabled    bool
@@ -66,6 +68,7 @@ type SpeechProcessor struct {
 	// Wake word detection
 	wakeWordEnabled bool
 	wakeWord        string
+	wakeWordSound   string
 	wakeWordBuffer  []float32
 	listeningActive bool
 } // NewSpeechProcessor creates a new speech processor
@@ -78,6 +81,7 @@ func NewSpeechProcessor(
 	conv ai.ConversationManager,
 	wakeWordEnabled bool,
 	wakeWord string,
+	wakeWordSound string,
 ) *SpeechProcessor {
 	return &SpeechProcessor{
 		audioCapture:    capture,
@@ -92,6 +96,7 @@ func NewSpeechProcessor(
 		aiEnabled:       aiSvc != nil,
 		wakeWordEnabled: wakeWordEnabled,
 		wakeWord:        wakeWord,
+		wakeWordSound:   wakeWordSound,
 		wakeWordBuffer:  make([]float32, 0, sampleRate*2), // 2 seconds for wake word detection
 		listeningActive: !wakeWordEnabled,                 // If wake word disabled, always listen
 	}
@@ -153,6 +158,22 @@ func (sp *SpeechProcessor) startListeningTimeout() {
 	}
 }
 
+// playWakeWordSound plays the wake word detection sound asynchronously
+func (sp *SpeechProcessor) playWakeWordSound() {
+	if sp.wakeWordSound == "" {
+		return
+	}
+
+	// Play sound using ffplay in background (suppress output)
+	go func() {
+		cmd := exec.Command("ffplay", "-nodisp", "-autoexit", "-v", "quiet", sp.wakeWordSound)
+		err := cmd.Run()
+		if err != nil {
+			log.Printf("🔊 Failed to play wake word sound: %v", err)
+		}
+	}()
+}
+
 // ProcessStream processes the audio stream
 func (sp *SpeechProcessor) ProcessStream(audioSource string) error {
 	stream, err := sp.audioCapture.StartCapture(audioSource)
@@ -197,6 +218,8 @@ func (sp *SpeechProcessor) ProcessStream(audioSource string) error {
 				if len(sp.wakeWordBuffer)%(sampleRate/2) == 0 {
 					if sp.detectWakeWord() {
 						fmt.Printf("🎯 Wake word '%s' detected! Activating listening...\n", sp.wakeWord)
+						// Play wake word sound
+						sp.playWakeWordSound()
 						sp.listeningActive = true
 						sp.resetWakeWordBuffer()
 						// Start a timer to deactivate listening after 30 seconds of inactivity
@@ -291,12 +314,20 @@ func (sp *SpeechProcessor) processWithAI(text string) {
 		return
 	}
 
+	// Validate response content
+	if response.Message.Content == "" {
+		log.Printf("⚠️  Warning: AI returned empty response")
+		return
+	}
+
 	// Add AI response to conversation
 	sp.conversation.AddMessage(response.Message)
 
 	// Display AI response
 	timestamp := time.Now().Format("15:04:05")
-	fmt.Printf("[%s] 🤖 %s\n", timestamp, strings.TrimSpace(response.Message.Content))
+	cleanContent := strings.TrimSpace(response.Message.Content)
+
+	fmt.Printf("[%s] 🤖 %s\n", timestamp, cleanContent)
 } // resetForNextPhrase resets state for next phrase
 func (sp *SpeechProcessor) resetForNextPhrase() {
 	sp.audioBuffer = sp.audioBuffer[:0]
@@ -344,6 +375,8 @@ Features:
 		"Enable wake word detection (requires saying wake word before listening)")
 	rootCmd.PersistentFlags().StringVar(&config.WakeWord, "wake-word-text",
 		"Jack", "Wake word to activate listening")
+	rootCmd.PersistentFlags().StringVar(&config.WakeWordSound, "wake-word-sound",
+		"./sounds/pop-cartoon-328167.mp3", "Sound file to play when wake word is detected")
 
 	// AI flags
 	rootCmd.PersistentFlags().BoolVar(&config.AIEnabled, "ai", false,
@@ -419,7 +452,7 @@ func runApp(config Config) {
 	}
 
 	// Create speech processor
-	processor := NewSpeechProcessor(audioCapture, audioProcessor, vadDetector, whisperService, aiService, conversation, config.WakeWordEnabled, config.WakeWord)
+	processor := NewSpeechProcessor(audioCapture, audioProcessor, vadDetector, whisperService, aiService, conversation, config.WakeWordEnabled, config.WakeWord, config.WakeWordSound)
 
 	// Initialize
 	if err := processor.Initialize(config.WhisperModel, config.AudioSource, config.Language); err != nil {

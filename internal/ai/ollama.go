@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -61,12 +62,46 @@ func (o *OllamaService) Chat(request ChatRequest) (ChatResponse, error) {
 		return ChatResponse{}, fmt.Errorf("API error %d: %s", resp.StatusCode, string(body))
 	}
 
-	var response ChatResponse
-	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
-		return ChatResponse{}, fmt.Errorf("failed to decode response: %w", err)
+	// Read the full response body
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return ChatResponse{}, fmt.Errorf("failed to read response body: %w", err)
 	}
 
-	return response, nil
+	// Ollama returns NDJSON (newline-delimited JSON) even with stream=false
+	// Parse multiple JSON objects and concatenate the content
+	lines := strings.Split(strings.TrimSpace(string(body)), "\n")
+	var finalResponse ChatResponse
+	var fullContent strings.Builder
+
+	for _, line := range lines {
+		if line == "" {
+			continue
+		}
+
+		var lineResponse ChatResponse
+		if err := json.Unmarshal([]byte(line), &lineResponse); err != nil {
+			continue
+		}
+
+		// Accumulate content from each JSON object
+		if lineResponse.Message.Content != "" {
+			fullContent.WriteString(lineResponse.Message.Content)
+		}
+
+		// Keep the response structure from the last object
+		finalResponse = lineResponse
+
+		// Break when we reach the final response
+		if lineResponse.Done {
+			break
+		}
+	}
+
+	// Set the concatenated content
+	finalResponse.Message.Content = fullContent.String()
+
+	return finalResponse, nil
 }
 
 // ChatStream sends a message and returns a streaming response
