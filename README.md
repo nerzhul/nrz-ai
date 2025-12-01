@@ -5,6 +5,7 @@
 ## ✨ Features
 
 - **🎯 Smart VAD**: RMS-based Voice Activity Detection with adaptive noise floor calibration
+- **🔍 Wake Word Detection**: Optional privacy mode - activate listening only with "Jack" (configurable)
 - **⚡ Real-time Processing**: Phrase-based transcription triggered by natural speech pauses
 - **🤖 AI Conversation**: Optional integration with Ollama for intelligent responses to voice input
 - **🧪 Testable Architecture**: Modular design with interfaces for easy unit testing and mocking
@@ -109,6 +110,8 @@ make all
 | `--model` | `-m` | `./models/ggml-large-v3.bin` | Path to Whisper model file |
 | `--language` | `-l` | `fr` | Language code (fr, en, es, etc.) |
 | `--audio-source` | `-a` | `default` | PulseAudio source name |
+| `--wake-word` | `-w` | `false` | Enable wake word detection |
+| `--wake-word-text` | | `Jack` | Custom wake word to activate listening |
 | `--ai` | | `false` | Enable AI conversation |
 | `--ollama-url` | | `http://localhost:11434` | Ollama server URL |
 | `--ollama-model` | | `llama3.2:3b` | Ollama model to use |
@@ -147,7 +150,20 @@ make all
 ./dist/nrz-ai --audio-source alsa_input.usb-RODE_RODE_AI-Micro-00.analog-stereo
 ```
 
-### AI Conversation Mode
+### Wake Word Mode (Privacy)
+```bash
+# Enable wake word detection with default "Jack"
+./dist/nrz-ai --wake-word
+
+# Custom wake word
+./dist/nrz-ai --wake-word --wake-word-text "Ordinateur"
+
+# Wake word with AI conversation
+./dist/nrz-ai --wake-word --ai
+
+# English wake word mode
+./dist/nrz-ai --wake-word --wake-word-text "Computer" --language en
+```
 ```bash
 # Enable AI with defaults (French assistant)
 ./dist/nrz-ai --ai
@@ -195,21 +211,23 @@ ffmpeg -f pulse -i default -ar 16000 -ac 1 -t 5 test.wav
 ./dist/nrz-ai test-audio
 ```
 
-### Example AI Conversation Output
+### Example Wake Word + AI Output
 ```
 🎙️  NRZ-AI - Real-time Speech-to-Text
 📦 Whisper model: ./models/ggml-large-v3.bin
 🎤 Audio source: default
 🗣️  Language: fr
+🔍 Wake word: Jack (listening mode)
 🤖 AI Service: Ollama (http://localhost:11434)
 🧠 Model: llama3.2:3b
 ✅ AI service connected successfully
-💡 Tip: Speak naturally, AI will respond to your voice!
+🎯 Say 'Jack' to activate listening, then speak normally
 ─────────────────────────────────────────────
-[15:04:12] 🎤 Bonjour, comment ça va aujourd'hui ?
-[15:04:13] 🤖 Bonjour ! Je vais très bien, merci. Comment puis-je vous aider aujourd'hui ?
-[15:04:18] 🎤 Peux-tu me donner la météo ?
-[15:04:19] 🤖 Je n'ai pas accès aux données météo en temps réel, mais je vous suggère de consulter votre app météo locale !
+🔍 Listening for wake word 'Jack'...
+🎯 Wake word 'Jack' detected! Activating listening...
+[15:04:12] 🎤 Bonjour, comment ça va ?
+[15:04:13] 🤖 Bonjour ! Je vais très bien, merci. Comment puis-je vous aider ?
+🔍 Listening timeout. Waiting for wake word 'Jack' again...
 ```
 
 ## 🧪 Development & Testing
@@ -314,6 +332,46 @@ ollama pull llama3.2:3b
 - Reduce conversation history: `--max-history 5`
 - Check Ollama server performance
 
+## 🔐 Wake Word Detection
+
+The wake word feature provides **privacy-first voice activation**. When enabled, the system only processes full transcription after detecting the configured wake word.
+
+### How It Works
+
+1. **🔍 Continuous Monitoring**: Listens for the wake word using small audio buffers (2 seconds)
+2. **🎯 Wake Word Detection**: Uses Whisper to detect the configured word (default: "Jack")
+3. **⚡ Activation**: Once detected, enables full speech processing for 30 seconds
+4. **🔒 Timeout**: Returns to wake word mode after 30 seconds of inactivity
+
+### Configuration Options
+
+```bash
+# Basic wake word (default: "Jack")
+./dist/nrz-ai --wake-word
+
+# Custom wake word in French
+./dist/nrz-ai --wake-word --wake-word-text "Ordinateur"
+
+# English wake word
+./dist/nrz-ai --wake-word --wake-word-text "Computer" --language en
+
+# Wake word + AI conversation
+./dist/nrz-ai --wake-word --ai --wake-word-text "Assistant"
+```
+
+### Privacy Benefits
+
+- **🔒 No always-on transcription**: Only processes speech after wake word
+- **📱 Lower resource usage**: Minimal processing when waiting for wake word
+- **🎛️ User control**: Explicit activation prevents accidental recordings
+- **⏱️ Auto-timeout**: Automatically returns to private mode after inactivity
+
+### Performance Notes
+
+- Wake word detection uses short 0.5-2 second audio buffers
+- Detection runs every 500ms to balance responsiveness and CPU usage
+- Uses the same Whisper model as main transcription for accuracy
+
 ## 🎯 Voice Activity Detection
 
 The VAD system uses sophisticated RMS-based detection:
@@ -341,6 +399,19 @@ type VADConfig struct {
 - **Accuracy**: 95%+ for clear French speech (large-v3)
 - **CPU Usage**: ~15-25% (large-v3), ~8-12% (medium)
 - **Memory**: ~4-6GB RAM + 4GB VRAM (large-v3)
+
+## 🔄 Recent Updates
+
+- ✅ **v3.1**: Wake word detection for privacy-first voice activation
+- ✅ **v3.0**: Complete CLI rewrite with Cobra framework  
+- ✅ **v2.5**: AI conversation integration with Ollama
+- ✅ **v2.1**: Conversation management with history limits
+- ✅ **v2.0**: Complete architecture refactor with interfaces
+- ✅ **Utility commands**: Built-in audio testing and model listing
+- ✅ **Professional CLI**: Comprehensive flags and help system
+- ✅ **RMS-based VAD**: Replaced simple amplitude detection
+- ✅ **Adaptive thresholds**: Automatic noise floor calibration
+- ✅ **Unit testing**: Mock interfaces for all components
 
 ## 🤝 Contributing
 

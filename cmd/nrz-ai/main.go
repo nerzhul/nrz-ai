@@ -34,6 +34,10 @@ type Config struct {
 	Language     string
 	AudioSource  string
 
+	// Wake Word
+	WakeWordEnabled bool
+	WakeWord        string
+
 	// AI Configuration
 	AIEnabled    bool
 	OllamaURL    string
@@ -58,6 +62,12 @@ type SpeechProcessor struct {
 	language      string
 	maxBufferSize int
 	aiEnabled     bool
+
+	// Wake word detection
+	wakeWordEnabled bool
+	wakeWord        string
+	wakeWordBuffer  []float32
+	listeningActive bool
 } // NewSpeechProcessor creates a new speech processor
 func NewSpeechProcessor(
 	capture audio.AudioCapture,
@@ -66,18 +76,24 @@ func NewSpeechProcessor(
 	service whisper.WhisperService,
 	aiSvc ai.AIService,
 	conv ai.ConversationManager,
+	wakeWordEnabled bool,
+	wakeWord string,
 ) *SpeechProcessor {
 	return &SpeechProcessor{
-		audioCapture:   capture,
-		audioProcessor: processor,
-		vadDetector:    detector,
-		whisperService: service,
-		aiService:      aiSvc,
-		conversation:   conv,
-		audioBuffer:    make([]float32, 0, sampleRate*maxBufferDurationS),
-		language:       "fr",
-		maxBufferSize:  sampleRate * maxBufferDurationS,
-		aiEnabled:      aiSvc != nil,
+		audioCapture:    capture,
+		audioProcessor:  processor,
+		vadDetector:     detector,
+		whisperService:  service,
+		aiService:       aiSvc,
+		conversation:    conv,
+		audioBuffer:     make([]float32, 0, sampleRate*maxBufferDurationS),
+		language:        "fr",
+		maxBufferSize:   sampleRate * maxBufferDurationS,
+		aiEnabled:       aiSvc != nil,
+		wakeWordEnabled: wakeWordEnabled,
+		wakeWord:        wakeWord,
+		wakeWordBuffer:  make([]float32, 0, sampleRate*2), // 2 seconds for wake word detection
+		listeningActive: !wakeWordEnabled,                 // If wake word disabled, always listen
 	}
 }
 
@@ -104,6 +120,39 @@ func (sp *SpeechProcessor) Initialize(modelPath, audioSource, language string) e
 	return sp.vadDetector.Initialize(vadConfig)
 }
 
+// detectWakeWord checks if the wake word is present in the audio buffer
+func (sp *SpeechProcessor) detectWakeWord() bool {
+	if !sp.wakeWordEnabled || len(sp.wakeWordBuffer) < sampleRate/2 {
+		return false
+	}
+
+	// Use Whisper to transcribe the wake word buffer
+	result, err := sp.whisperService.Transcribe(sp.wakeWordBuffer, sp.language)
+	if err != nil {
+		return false
+	}
+
+	// Check if wake word is present (case-insensitive)
+	text := strings.ToLower(strings.TrimSpace(result.Text))
+	wakeWord := strings.ToLower(sp.wakeWord)
+
+	return strings.Contains(text, wakeWord)
+}
+
+// resetWakeWordBuffer clears the wake word buffer
+func (sp *SpeechProcessor) resetWakeWordBuffer() {
+	sp.wakeWordBuffer = sp.wakeWordBuffer[:0]
+}
+
+// startListeningTimeout deactivates listening after 30 seconds of inactivity
+func (sp *SpeechProcessor) startListeningTimeout() {
+	time.Sleep(30 * time.Second)
+	if sp.wakeWordEnabled {
+		sp.listeningActive = false
+		fmt.Printf("🔍 Listening timeout. Waiting for wake word '%s' again...\n", sp.wakeWord)
+	}
+}
+
 // ProcessStream processes the audio stream
 func (sp *SpeechProcessor) ProcessStream(audioSource string) error {
 	stream, err := sp.audioCapture.StartCapture(audioSource)
@@ -116,7 +165,11 @@ func (sp *SpeechProcessor) ProcessStream(audioSource string) error {
 	silenceThresholdSamples := (silenceDurationMs * sampleRate) / 1000
 	minSpeechSamples := (minSpeechDurationMs * sampleRate) / 1000
 
-	fmt.Println("🔴 Processing audio stream...")
+	if sp.wakeWordEnabled {
+		fmt.Printf("🔍 Listening for wake word '%s'...\n", sp.wakeWord)
+	} else {
+		fmt.Println("🔴 Processing audio stream...")
+	}
 
 	for {
 		n, err := stream.Read(chunk)
@@ -129,6 +182,34 @@ func (sp *SpeechProcessor) ProcessStream(audioSource string) error {
 		samples := sp.audioProcessor.ProcessBytes(chunk[:n])
 
 		for _, sample := range samples {
+			// Handle wake word detection
+			if sp.wakeWordEnabled {
+				sp.wakeWordBuffer = append(sp.wakeWordBuffer, sample)
+
+				// Keep wake word buffer to reasonable size (2 seconds)
+				if len(sp.wakeWordBuffer) > sampleRate*2 {
+					// Remove oldest samples
+					copy(sp.wakeWordBuffer, sp.wakeWordBuffer[sampleRate/4:])
+					sp.wakeWordBuffer = sp.wakeWordBuffer[:len(sp.wakeWordBuffer)-sampleRate/4]
+				}
+
+				// Check for wake word every 500ms
+				if len(sp.wakeWordBuffer)%(sampleRate/2) == 0 {
+					if sp.detectWakeWord() {
+						fmt.Printf("🎯 Wake word '%s' detected! Activating listening...\n", sp.wakeWord)
+						sp.listeningActive = true
+						sp.resetWakeWordBuffer()
+						// Start a timer to deactivate listening after 30 seconds of inactivity
+						go sp.startListeningTimeout()
+					}
+				}
+
+				// If not actively listening, skip regular processing
+				if !sp.listeningActive {
+					continue
+				}
+			}
+
 			sp.audioBuffer = append(sp.audioBuffer, sample)
 
 			// Process sample with VAD
@@ -236,11 +317,12 @@ func main() {
 	var rootCmd = &cobra.Command{
 		Use:   "nrz-ai",
 		Short: "Real-time Speech-to-Text with AI conversation",
-		Long: `NRZ-AI is a real-time speech-to-text application with intelligent Voice Activity Detection
-and optional AI conversation capabilities using Ollama.
+		Long: `NRZ-AI is a real-time speech-to-text application with intelligent Voice Activity Detection,
+optional wake word detection, and AI conversation capabilities using Ollama.
 
 Features:
   • Smart VAD with adaptive noise floor calibration
+  • Wake word detection for privacy (optional)
   • Real-time French/multilingual speech transcription  
   • Optional AI conversation with Ollama integration
   • Configurable models and audio sources`,
@@ -256,6 +338,12 @@ Features:
 		"fr", "Language code (fr, en, es, etc.)")
 	rootCmd.PersistentFlags().StringVarP(&config.AudioSource, "audio-source", "a",
 		"default", "Audio source (PulseAudio device name)")
+
+	// Wake Word flags
+	rootCmd.PersistentFlags().BoolVarP(&config.WakeWordEnabled, "wake-word", "w", false,
+		"Enable wake word detection (requires saying wake word before listening)")
+	rootCmd.PersistentFlags().StringVar(&config.WakeWord, "wake-word-text",
+		"Jack", "Wake word to activate listening")
 
 	// AI flags
 	rootCmd.PersistentFlags().BoolVar(&config.AIEnabled, "ai", false,
@@ -293,6 +381,10 @@ func runApp(config Config) {
 	fmt.Printf("🎤 Audio source: %s\n", config.AudioSource)
 	fmt.Printf("🗣️  Language: %s\n", config.Language)
 
+	if config.WakeWordEnabled {
+		fmt.Printf("🔍 Wake word: %s (listening mode)\n", config.WakeWord)
+	}
+
 	if config.AIEnabled {
 		fmt.Printf("🤖 AI Service: Ollama (%s)\n", config.OllamaURL)
 		fmt.Printf("🧠 Model: %s\n", config.OllamaModel)
@@ -327,7 +419,7 @@ func runApp(config Config) {
 	}
 
 	// Create speech processor
-	processor := NewSpeechProcessor(audioCapture, audioProcessor, vadDetector, whisperService, aiService, conversation)
+	processor := NewSpeechProcessor(audioCapture, audioProcessor, vadDetector, whisperService, aiService, conversation, config.WakeWordEnabled, config.WakeWord)
 
 	// Initialize
 	if err := processor.Initialize(config.WhisperModel, config.AudioSource, config.Language); err != nil {
@@ -349,6 +441,11 @@ func runApp(config Config) {
 	if config.AIEnabled {
 		fmt.Println("💡 Tip: Speak naturally, AI will respond to your voice!")
 	}
+
+	if config.WakeWordEnabled {
+		fmt.Printf("🎯 Say '%s' to activate listening, then speak normally\n", config.WakeWord)
+	}
+
 	fmt.Println("─────────────────────────────────────────────")
 
 	// Start processing
