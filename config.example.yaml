@@ -1,0 +1,29 @@
+# NRZ-AI Configuration File
+# This file will be automatically created at ~/.config/nrz-ai/config.yaml
+# You can override any setting here instead of using command line flags
+
+# Audio & Speech Configuration
+whisper_model: "./models/ggml-large-v3.bin"  # Path to Whisper model file
+language: "fr"                               # Language code (fr, en, es, etc.)
+audio_source: "default"                      # Audio source (PulseAudio device name)
+
+# Wake Word Detection
+wake_word_enabled: false                     # Enable wake word detection
+wake_word: "Jack"                            # Wake word to activate listening
+wake_word_sound: "./sounds/pop-cartoon-328167.mp3"  # Sound file to play when wake word is detected
+
+# AI Configuration
+ai_enabled: false                            # Enable AI conversation with Ollama
+ollama_url: "http://localhost:11434"         # Ollama server URL
+ollama_model: "llama3.2:3b"                  # Ollama model to use
+system_prompt: "Tu es un assistant vocal français intelligent et concis. Réponds brièvement et naturellement."
+
+# Advanced Settings
+log_level: "info"                            # Log level: debug, info, warn, error
+max_history: 10                              # Maximum conversation history to keep
+
+# Example usage:
+# 1. Copy this file to ~/.config/nrz-ai/config.yaml
+# 2. Edit the values as needed
+# 3. Run nrz-ai without flags - it will use these settings
+# 4. Command line flags will override these settings if provided

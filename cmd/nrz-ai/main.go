@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -12,6 +11,8 @@ import (
 
 	"github.com/nerzhul/nrz-ai/internal/ai"
 	"github.com/nerzhul/nrz-ai/internal/audio"
+	"github.com/nerzhul/nrz-ai/internal/config"
+	"github.com/nerzhul/nrz-ai/internal/logger"
 	"github.com/nerzhul/nrz-ai/internal/vad"
 	"github.com/nerzhul/nrz-ai/internal/whisper"
 	"github.com/spf13/cobra"
@@ -28,28 +29,7 @@ const (
 	noiseFloorSamples   = 32000
 )
 
-// Config holds all configuration options
-type Config struct {
-	// Audio & Speech
-	WhisperModel string
-	Language     string
-	AudioSource  string
 
-	// Wake Word
-	WakeWordEnabled bool
-	WakeWord        string
-	WakeWordSound   string
-
-	// AI Configuration
-	AIEnabled    bool
-	OllamaURL    string
-	OllamaModel  string
-	SystemPrompt string
-
-	// Advanced
-	Verbose    bool
-	MaxHistory int
-}
 
 // SpeechProcessor handles the main speech-to-text processing
 type SpeechProcessor struct {
@@ -169,7 +149,7 @@ func (sp *SpeechProcessor) playWakeWordSound() {
 		cmd := exec.Command("ffplay", "-nodisp", "-autoexit", "-v", "quiet", sp.wakeWordSound)
 		err := cmd.Run()
 		if err != nil {
-			log.Printf("🔊 Failed to play wake word sound: %v", err)
+			logger.WithError(err).Error("🔊 Failed to play wake word sound")
 		}
 	}()
 }
@@ -195,7 +175,7 @@ func (sp *SpeechProcessor) ProcessStream(audioSource string) error {
 	for {
 		n, err := stream.Read(chunk)
 		if err != nil {
-			log.Printf("Error reading audio stream: %v", err)
+			logger.WithError(err).Error("Error reading audio stream")
 			break
 		}
 
@@ -252,7 +232,7 @@ func (sp *SpeechProcessor) ProcessStream(audioSource string) error {
 
 		// Prevent buffer overflow
 		if len(sp.audioBuffer) >= sp.maxBufferSize {
-			log.Println("⚠️  Max buffer reached, processing...")
+			logger.Warn("⚠️  Max buffer reached, processing...")
 			sp.transcribeAndOutput()
 			sp.resetForNextPhrase()
 		}
@@ -263,12 +243,12 @@ func (sp *SpeechProcessor) ProcessStream(audioSource string) error {
 
 // transcribeAndOutput transcribes current buffer and outputs result
 func (sp *SpeechProcessor) transcribeAndOutput() {
-	log.Printf("📊 Processing %d samples (%.2f seconds)",
+	logger.Debugf("📈 Processing %d samples (%.2f seconds)",
 		len(sp.audioBuffer), float64(len(sp.audioBuffer))/float64(sampleRate))
 
 	result, err := sp.whisperService.Transcribe(sp.audioBuffer, sp.language)
 	if err != nil {
-		log.Printf("Failed to transcribe: %v", err)
+		logger.WithError(err).Error("Failed to transcribe")
 		return
 	}
 
@@ -305,18 +285,18 @@ func (sp *SpeechProcessor) processWithAI(text string) {
 	// Send to AI
 	response, err := sp.aiService.Chat(request)
 	if err != nil {
-		log.Printf("❌ AI Error: %v", err)
+		logger.WithError(err).Error("❌ AI Error")
 		return
 	}
 
 	if response.Error != "" {
-		log.Printf("❌ AI Response Error: %s", response.Error)
+		logger.WithField("error", response.Error).Error("❌ AI Response Error")
 		return
 	}
 
 	// Validate response content
 	if response.Message.Content == "" {
-		log.Printf("⚠️  Warning: AI returned empty response")
+		logger.Warn("⚠️  Warning: AI returned empty response")
 		return
 	}
 
@@ -337,13 +317,21 @@ func (sp *SpeechProcessor) resetForNextPhrase() {
 // Close closes all resources
 func (sp *SpeechProcessor) Close() error {
 	if err := sp.audioCapture.Stop(); err != nil {
-		log.Printf("Error stopping audio capture: %v", err)
+		logger.WithError(err).Error("Error stopping audio capture")
 	}
 	return sp.whisperService.Close()
 }
 
 func main() {
-	var config Config
+	// Load configuration
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		logger.InitLogger("info")
+		logger.WithError(err).Fatal("Failed to load configuration")
+	}
+
+	// Initialize logger
+	logger.InitLogger(cfg.LogLevel)
 
 	var rootCmd = &cobra.Command{
 		Use:   "nrz-ai",
@@ -358,69 +346,64 @@ Features:
   • Optional AI conversation with Ollama integration
   • Configurable models and audio sources`,
 		Run: func(cmd *cobra.Command, args []string) {
-			runApp(config)
+			runApp(*cfg)
 		},
 	}
 
 	// Audio & Speech flags
-	rootCmd.PersistentFlags().StringVarP(&config.WhisperModel, "model", "m",
-		"./models/ggml-large-v3.bin", "Path to Whisper model file")
-	rootCmd.PersistentFlags().StringVarP(&config.Language, "language", "l",
-		"fr", "Language code (fr, en, es, etc.)")
-	rootCmd.PersistentFlags().StringVarP(&config.AudioSource, "audio-source", "a",
-		"default", "Audio source (PulseAudio device name)")
+	rootCmd.PersistentFlags().StringVarP(&cfg.WhisperModel, "model", "m",
+		cfg.WhisperModel, "Path to Whisper model file")
+	rootCmd.PersistentFlags().StringVarP(&cfg.Language, "language", "l",
+		cfg.Language, "Language code (fr, en, es, etc.)")
+	rootCmd.PersistentFlags().StringVarP(&cfg.AudioSource, "audio-source", "a",
+		cfg.AudioSource, "Audio source (PulseAudio device name)")
 
 	// Wake Word flags
-	rootCmd.PersistentFlags().BoolVarP(&config.WakeWordEnabled, "wake-word", "w", false,
-		"Enable wake word detection (requires saying wake word before listening)")
-	rootCmd.PersistentFlags().StringVar(&config.WakeWord, "wake-word-text",
-		"Jack", "Wake word to activate listening")
-	rootCmd.PersistentFlags().StringVar(&config.WakeWordSound, "wake-word-sound",
-		"./sounds/pop-cartoon-328167.mp3", "Sound file to play when wake word is detected")
+	rootCmd.PersistentFlags().BoolVarP(&cfg.WakeWordEnabled, "wake-word", "w", 
+		cfg.WakeWordEnabled, "Enable wake word detection (requires saying wake word before listening)")
+	rootCmd.PersistentFlags().StringVar(&cfg.WakeWord, "wake-word-text",
+		cfg.WakeWord, "Wake word to activate listening")
+	rootCmd.PersistentFlags().StringVar(&cfg.WakeWordSound, "wake-word-sound",
+		cfg.WakeWordSound, "Sound file to play when wake word is detected")
 
 	// AI flags
-	rootCmd.PersistentFlags().BoolVar(&config.AIEnabled, "ai", false,
-		"Enable AI conversation with Ollama")
-	rootCmd.PersistentFlags().StringVar(&config.OllamaURL, "ollama-url",
-		"http://localhost:11434", "Ollama server URL")
-	rootCmd.PersistentFlags().StringVar(&config.OllamaModel, "ollama-model",
-		"llama3.2:3b", "Ollama model to use")
-	rootCmd.PersistentFlags().StringVar(&config.SystemPrompt, "system-prompt",
-		"Tu es un assistant vocal français intelligent et concis. Réponds brièvement et naturellement.",
-		"AI system prompt")
-	rootCmd.PersistentFlags().IntVar(&config.MaxHistory, "max-history", 10,
-		"Maximum conversation history to keep")
+	rootCmd.PersistentFlags().BoolVar(&cfg.AIEnabled, "ai",
+		cfg.AIEnabled, "Enable AI conversation with Ollama")
+	rootCmd.PersistentFlags().StringVar(&cfg.OllamaURL, "ollama-url",
+		cfg.OllamaURL, "Ollama server URL")
+	rootCmd.PersistentFlags().StringVar(&cfg.OllamaModel, "ollama-model",
+		cfg.OllamaModel, "Ollama model to use")
+	rootCmd.PersistentFlags().StringVar(&cfg.SystemPrompt, "system-prompt",
+		cfg.SystemPrompt, "AI system prompt")
+	rootCmd.PersistentFlags().IntVar(&cfg.MaxHistory, "max-history", 
+		cfg.MaxHistory, "Maximum conversation history to keep")
 
 	// Advanced flags
-	rootCmd.PersistentFlags().BoolVarP(&config.Verbose, "verbose", "v", false,
-		"Enable verbose logging")
+	rootCmd.PersistentFlags().StringVar(&cfg.LogLevel, "log-level",
+		cfg.LogLevel, "Log level (debug, info, warn, error)")
 
 	// Add subcommands
 	rootCmd.AddCommand(createListModelsCmd())
 	rootCmd.AddCommand(createTestAudioCmd())
 
 	if err := rootCmd.Execute(); err != nil {
-		log.Fatal(err)
+		logger.WithError(err).Fatal("Failed to execute command")
 	}
 }
 
-func runApp(config Config) {
-	if config.Verbose {
-		log.SetFlags(log.LstdFlags | log.Lshortfile)
-	}
-
+func runApp(cfg config.Config) {
 	fmt.Printf("🎙️  NRZ-AI - Real-time Speech-to-Text\n")
-	fmt.Printf("📦 Whisper model: %s\n", config.WhisperModel)
-	fmt.Printf("🎤 Audio source: %s\n", config.AudioSource)
-	fmt.Printf("🗣️  Language: %s\n", config.Language)
+	fmt.Printf("📦 Whisper model: %s\n", cfg.WhisperModel)
+	fmt.Printf("🎤 Audio source: %s\n", cfg.AudioSource)
+	fmt.Printf("🗣️  Language: %s\n", cfg.Language)
 
-	if config.WakeWordEnabled {
-		fmt.Printf("🔍 Wake word: %s (listening mode)\n", config.WakeWord)
+	if cfg.WakeWordEnabled {
+		fmt.Printf("🔍 Wake word: %s (listening mode)\n", cfg.WakeWord)
 	}
 
-	if config.AIEnabled {
-		fmt.Printf("🤖 AI Service: Ollama (%s)\n", config.OllamaURL)
-		fmt.Printf("🧠 Model: %s\n", config.OllamaModel)
+	if cfg.AIEnabled {
+		fmt.Printf("🤖 AI Service: Ollama (%s)\n", cfg.OllamaURL)
+		fmt.Printf("🧠 Model: %s\n", cfg.OllamaModel)
 	}
 
 	// Create components using our architecture
@@ -433,30 +416,30 @@ func runApp(config Config) {
 	var aiService ai.AIService
 	var conversation ai.ConversationManager
 
-	if config.AIEnabled {
-		aiService = ai.NewOllamaService(config.OllamaURL, config.OllamaModel)
-		conversation = ai.NewConversation(config.MaxHistory)
+	if cfg.AIEnabled {
+		aiService = ai.NewOllamaService(cfg.OllamaURL, cfg.OllamaModel)
+		conversation = ai.NewConversation(cfg.MaxHistory)
 
 		// Check if Ollama is available
 		if !aiService.IsAvailable() {
-			log.Printf("⚠️  Warning: Ollama service not available at %s", config.OllamaURL)
-			log.Printf("   Make sure Ollama is running: ollama serve")
-			log.Printf("   And the model is available: ollama pull %s", config.OllamaModel)
-			config.AIEnabled = false
+			logger.Warnf("⚠️  Warning: Ollama service not available at %s", cfg.OllamaURL)
+			logger.Warn("   Make sure Ollama is running: ollama serve")
+			logger.Warnf("   And the model is available: ollama pull %s", cfg.OllamaModel)
+			cfg.AIEnabled = false
 			aiService = nil
 			conversation = nil
 		} else {
-			conversation.SetSystemPrompt(config.SystemPrompt)
+			conversation.SetSystemPrompt(cfg.SystemPrompt)
 			fmt.Printf("✅ AI service connected successfully\n")
 		}
 	}
 
 	// Create speech processor
-	processor := NewSpeechProcessor(audioCapture, audioProcessor, vadDetector, whisperService, aiService, conversation, config.WakeWordEnabled, config.WakeWord, config.WakeWordSound)
+	processor := NewSpeechProcessor(audioCapture, audioProcessor, vadDetector, whisperService, aiService, conversation, cfg.WakeWordEnabled, cfg.WakeWord, cfg.WakeWordSound)
 
 	// Initialize
-	if err := processor.Initialize(config.WhisperModel, config.AudioSource, config.Language); err != nil {
-		log.Fatalf("Failed to initialize: %v", err)
+	if err := processor.Initialize(cfg.WhisperModel, cfg.AudioSource, cfg.Language); err != nil {
+		logger.WithError(err).Fatal("Failed to initialize")
 	}
 	defer processor.Close()
 
@@ -471,19 +454,19 @@ func runApp(config Config) {
 		os.Exit(0)
 	}()
 
-	if config.AIEnabled {
+	if cfg.AIEnabled {
 		fmt.Println("💡 Tip: Speak naturally, AI will respond to your voice!")
 	}
 
-	if config.WakeWordEnabled {
-		fmt.Printf("🎯 Say '%s' to activate listening, then speak normally\n", config.WakeWord)
+	if cfg.WakeWordEnabled {
+		fmt.Printf("🎯 Say '%s' to activate listening, then speak normally\n", cfg.WakeWord)
 	}
 
 	fmt.Println("─────────────────────────────────────────────")
 
 	// Start processing
-	if err := processor.ProcessStream(config.AudioSource); err != nil {
-		log.Fatalf("Failed to process stream: %v", err)
+	if err := processor.ProcessStream(cfg.AudioSource); err != nil {
+		logger.WithError(err).Fatal("Failed to process stream")
 	}
 }
 
@@ -499,12 +482,12 @@ func createListModelsCmd() *cobra.Command {
 
 			service := ai.NewOllamaService(ollamaURL, "")
 			if !service.IsAvailable() {
-				log.Fatalf("❌ Ollama not available at %s", ollamaURL)
+				logger.WithField("url", ollamaURL).Fatal("❌ Ollama not available")
 			}
 
 			models, err := service.ListModels()
 			if err != nil {
-				log.Fatalf("❌ Failed to list models: %v", err)
+				logger.WithError(err).Fatal("❌ Failed to list models")
 			}
 
 			fmt.Println("📋 Available Ollama models:")
@@ -531,7 +514,7 @@ func createTestAudioCmd() *cobra.Command {
 			capture := audio.NewFFmpegCapture()
 			stream, err := capture.StartCapture(audioSource)
 			if err != nil {
-				log.Fatalf("❌ Failed to start audio capture: %v", err)
+				logger.WithError(err).Fatal("❌ Failed to start audio capture")
 			}
 			defer stream.Close()
 
@@ -553,7 +536,7 @@ func createTestAudioCmd() *cobra.Command {
 				default:
 					n, err := stream.Read(buffer)
 					if err != nil {
-						log.Printf("❌ Audio read error: %v", err)
+						logger.WithError(err).Error("❌ Audio read error")
 						return
 					}
 					totalBytes += n
